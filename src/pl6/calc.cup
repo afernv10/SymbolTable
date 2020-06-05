@@ -1,0 +1,323 @@
+package pl6;
+/*
+* Autor: Ander José Fernández Vega
+* Practica: P6 - LALR con CUP
+*/
+
+import java_cup.runtime.*;
+import java.io.*;
+import java.util.List;
+import java.util.LinkedList;
+
+parser code {:
+
+private PilaTablasSimbolos pila;
+private TablaSimbolos ts;
+private Simbolo simb;
+
+public static void main(String[] argv){
+	if (argv.length == 0) {
+		      System.out.println("Uso : java Parser  <inputfile)>");
+		    }
+	else{
+		try {
+			java.io.FileInputStream stream = new java.io.FileInputStream(argv[0]);
+		    java.io.Reader reader = new java.io.InputStreamReader(stream);
+			Scanner analizadorLexico= new Yylex(reader);
+			Parser parserObj = new Parser();
+			parserObj.setScanner(analizadorLexico);
+			parserObj.parse();
+		}
+		catch(Exception x) {
+			x.printStackTrace();
+			System.out.println("Error fatal.");
+		}
+	}
+}
+
+// SYNTAX ERRORs
+public void syntax_error(Symbol cur_token){
+	String msg="[Parser] Error de sintaxis: '"+
+		symbl_name_from_id(cur_token.sym)+
+		"' en línea "+cur_token.left+", columna "+cur_token.right+"\n";
+	List<Integer> list_of_ids = expected_token_ids();
+	LinkedList<String> list = new LinkedList<String>();
+	for (Integer token_id : list_of_ids)
+		list.add(symbl_name_from_id(token_id));
+	msg += "\tTipos de tokens esperados: " + list +"\n";
+	System.out.println(msg);
+}
+
+:};
+
+
+/*Inicializacion del analizador lexico si procede*/
+/* Con JFlex esto no es necesario */
+//init with {: s.init(); :};
+/*Siguiente token al lexico*/
+//scan with {: return this.getScanner().next_token(); :};
+
+/*Terminales tokens que puede devolver el lexico*/
+terminal SEMICOLON, PLUS, MINUS, TIMES, DIV, POW, SQRT, ASSIGN;
+terminal LEFT_PARENTHESIS, RIGHT_PARENTHESIS, LEFT_SQBRACKET, RIGHT_SQBRACKET, LEFT_BRACE, RIGHT_BRACE, PRINT, UPLUS, UMINUS, TIPO_INT, TIPO_FLOAT;
+
+/*Terminales con atributo*/
+terminal Number FLOAT;
+terminal Number INTEGER;
+terminal String ID;
+
+/* No terminales sin atributo*/
+non terminal programa, bloque, decls, decl, instrs, instr;
+
+/* No terminales con atributo*/
+non terminal Simbolo expr;
+non terminal Simbolo factor;
+non terminal String tipo, t_basico, t_componente;
+
+/*Precedencias*/
+precedence left PLUS,MINUS;
+precedence left TIMES,DIV;
+precedence right POW;
+precedence nonassoc SQRT;
+precedence left UMINUS, UPLUS;
+
+start with programa;
+
+/*Gramatica*/
+// programa --> bloque
+// bloque --> { decls instrs }
+// decls --> decls decl | e
+// decl --> tipo id;
+// tipo --> t_basico t_componente
+// t_basico --> tipo_int | tipo_float
+// t_componente --> [num_int] t_componente | e
+// instrs --> instrs instr | e
+// instr --> bloque | factor = expr; | print(factor);
+// factor --> id
+// expr --> num_int | num_float | factor | expr + expr
+//			| expr - expr | expr * expr | expr / expr
+//			| expr ^ expr | sqrt(expr) | +expr | -expr | (expr)
+programa ::= {: pila = new PilaTablasSimbolos(); :} bloque
+;
+bloque ::= 
+	{: System.out.println("\n<INICIO DE BLOQUE>"); :}
+	LEFT_BRACE 
+	{: 	if(ts != null){
+			pila.push(ts);
+		}
+		ts=new TablaSimbolos(pila);
+	:}
+	decls instrs RIGHT_BRACE	
+	{: 	if(pila.size()>0){
+			ts=pila.pop();
+		} else{
+			ts=null;
+		}
+		System.out.println("<FIN DE BLOQUE>\n");  
+	:}
+;
+
+decls ::= decls decl
+|
+;
+
+decl ::= tipo:t0 ID:id0 SEMICOLON 
+{: 	simb=new Simbolo(id0, t0, 0);
+	ts.put(simb.nombre, simb); 
+:}
+| error {: :} SEMICOLON
+;
+
+tipo ::= t_basico:tb t_componente:tc
+{: 	if(tc == null){
+		RESULT = tb;
+	}else{
+		RESULT = "Array de ("+tc.toString()+", "+tb.toString()+")";
+	}
+:}
+;
+
+t_basico ::= TIPO_INT 
+{: RESULT="TIPO_INT"; :}
+| TIPO_FLOAT {: RESULT="TIPO_FLOAT"; :}
+;
+
+t_componente ::= LEFT_SQBRACKET INTEGER:n RIGHT_SQBRACKET t_componente:tc
+{: 	if(tc!= null)
+		RESULT = "" + String.valueOf(n) + "x" + tc; 
+	else
+		RESULT = ""+ String.valueOf(n); 
+:}
+|
+;
+
+instrs ::= instrs instr
+|
+;
+
+instr ::= bloque
+| factor:f1 ASSIGN expr:e SEMICOLON
+{: 	try{
+		simb = ts.get(f1.nombre);
+		if(simb!=null){
+			if(f1.tipo.equals(e.tipo)){
+				Number nuevo_valor = e.valor;
+				Simbolo simb_aux = new Simbolo(f1.nombre, f1.tipo, nuevo_valor);
+				ts.put(f1.nombre, simb_aux);
+			} else if(f1.tipo.equals("TIPO_FLOAT") && e.tipo.equals("TIPO_INT")){
+				Number nuevo_valor = e.valor.floatValue();
+				Simbolo simb_aux = new Simbolo(f1.nombre, f1.tipo, nuevo_valor);
+				ts.put(f1.nombre, simb_aux);
+			} else {
+				System.out.println("Incompatibilidad de tipos: " + f1.nombre+" no es de tipo "+e.tipo+" [linea: "+f1left+", col:"+f1right+"]\n");
+			}
+		} else
+			System.out.println("Variable no declarada: " + f1.nombre+" [linea: "+f1left+", col:"+f1right+"]\n");
+	} catch (Exception ex){}
+:}
+| PRINT LEFT_PARENTHESIS factor:f1 RIGHT_PARENTHESIS SEMICOLON
+{:	try{
+		simb = ts.get(f1.nombre);
+		if(simb!=null){
+			System.out.println(simb);
+		} else {
+			System.out.println("Variable no declarada: " + f1.nombre+" [linea: "+f1left+", col:"+f1right+"]\n");
+		}
+	} catch(Exception ex){}
+:}
+;
+
+factor ::= ID:id1
+{: 	simb = ts.get(id1);
+	if(simb!=null){
+		RESULT = simb;
+	} else {
+		System.out.println("Variable no declarada: " + id1 +" [linea: "+id1left+", col:"+id1right+"]\n");
+		RESULT=null;
+	} 
+:}
+;
+
+expr ::= factor:f1
+{:	try{
+		simb=ts.get(f1.nombre);
+		if(simb!=null)
+			RESULT = simb;
+		else {
+			System.out.println("Variable no declarada: " + f1 +" [linea: "+f1left+", col:"+f1right+"]\n");
+			RESULT=null;
+		}
+	} catch (Exception ex){
+		RESULT=null;
+	} 
+:} 
+| expr:e1 PLUS expr:e2
+{:	try{
+		if((e1.tipo.equals("TIPO_FLOAT")) || (e2.tipo.equals("TIPO_FLOAT"))){
+			float res = e1.valor.floatValue() + e2.valor.floatValue();
+			RESULT = new Simbolo("", "TIPO_FLOAT", res);
+		} else {
+			int res = e1.valor.intValue() + e2.valor.intValue();
+			RESULT = new Simbolo("", "TIPO_INT", res);
+		}
+	} catch (Exception ex){
+		RESULT=null;
+	} 
+:} 
+| expr:e1 MINUS expr:e2
+{:	try{
+		if((e1.tipo.equals("TIPO_FLOAT")) || (e2.tipo.equals("TIPO_FLOAT"))){
+			float res = e1.valor.floatValue() - e2.valor.floatValue();
+			RESULT = new Simbolo("", "TIPO_FLOAT", res);
+		} else {
+			int res = e1.valor.intValue() - e2.valor.intValue();
+			RESULT = new Simbolo("", "TIPO_INT", res);
+		}
+	} catch (Exception ex){
+		RESULT=null;
+	}  
+:}
+| expr:e1 TIMES expr:e2 
+{:	try{
+		if((e1.tipo.equals("TIPO_FLOAT")) || (e2.tipo.equals("TIPO_FLOAT"))){
+			float res = e1.valor.floatValue() * e2.valor.floatValue();
+			RESULT = new Simbolo("", "TIPO_FLOAT", res);
+		} else {
+			int res = e1.valor.intValue() * e2.valor.intValue();
+			RESULT = new Simbolo("", "TIPO_INT", res);
+		}
+	} catch (Exception ex){
+		RESULT=null;
+	} 
+:}
+| expr:e1 DIV expr:e2
+{:	try{
+		if((e1.tipo.equals("TIPO_FLOAT")) || (e2.tipo.equals("TIPO_FLOAT"))){
+			float res = e1.valor.floatValue() / e2.valor.floatValue();
+			RESULT = new Simbolo("", "TIPO_FLOAT", res);
+		} else {
+			int res = e1.valor.intValue() / e2.valor.intValue();
+			RESULT = new Simbolo("", "TIPO_INT", res);
+		}
+	} catch (Exception ex){
+		RESULT=null;
+	} 
+:} 
+| expr:e1 POW expr:e2 
+{:	try{
+		if((e1.tipo.equals("TIPO_FLOAT")) || (e2.tipo.equals("TIPO_FLOAT"))){
+			float res = new Float(Math.pow(e1.valor.floatValue(), e2.valor.floatValue()));
+			RESULT = new Simbolo("", "TIPO_FLOAT", res);
+		} else {
+			int res = (int) Math.pow(e1.valor.floatValue(), e2.valor.floatValue());
+			RESULT = new Simbolo("", "TIPO_INT", res);
+		}
+	} catch (Exception ex){
+		RESULT=null;
+	}
+:}
+| SQRT LEFT_PARENTHESIS expr:e RIGHT_PARENTHESIS
+{:	try{
+		float valor = new Float(Math.sqrt(e.valor.floatValue()));
+		RESULT= new Simbolo("", "TIPO_FLOAT", valor);
+	} catch (Exception ex){
+		RESULT=null;
+	}
+:}
+| FLOAT:n
+{: RESULT=new Simbolo("", "TIPO_FLOAT", n.floatValue()); :}
+| INTEGER:n
+{: RESULT=new Simbolo("", "TIPO_INT", n.intValue()); :} 
+| MINUS expr:e 
+{: 	try{
+		if(e.tipo.equals("TIPO_FLOAT")){
+			System.out.println(e.valor);
+			float valor = -e.valor.floatValue();
+			RESULT= new Simbolo("", "TIPO_FLOAT", valor);	
+		} else {
+			int valor = -e.valor.intValue();
+			RESULT= new Simbolo("", "TIPO_INT", valor);
+		}
+	} catch(Exception ex){
+		RESULT=null;
+	}
+		
+:} %prec UMINUS
+| PLUS expr:e 
+{: try{
+		if(e.tipo.equals("TIPO_FLOAT")){
+			float valor = e.valor.floatValue();
+			RESULT= new Simbolo("", "TIPO_FLOAT", valor);	
+		} else {
+			int valor = e.valor.intValue();
+			RESULT= new Simbolo("", "TIPO_INT", valor);
+		}
+	} catch(Exception ex){
+		RESULT=null;
+	}
+:} %prec UPLUS
+| LEFT_PARENTHESIS expr:e RIGHT_PARENTHESIS 
+{: RESULT=e; :}
+;
+
+
